@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
@@ -22,7 +23,8 @@ import (
 )
 
 type Game struct {
-	img       *ebiten.Image
+	img       image.Image
+	drawImg   *ebiten.Image
 	hasImg    bool
 	scale     float64
 	offsetX   float64
@@ -200,20 +202,19 @@ func (g *Game) ptInSel(px, py float64) bool {
 	return px >= minX && px <= maxX && py >= minY && py <= maxY
 }
 
-func (g *Game) screenToImg(sx, sy float64) (float64, float64) {
+func (g *Game) screenToImg(sx, sy float64, ww, wh int) (float64, float64) {
 	iw := float64(g.img.Bounds().Dx())
 	ih := float64(g.img.Bounds().Dy())
-	ww, wh := ebiten.WindowSize()
 	dw := iw * g.scale
 	dh := ih * g.scale
-	ix := (float64(ww) - dw) / 2 + g.offsetX
-	iy := (float64(wh) - dh) / 2 + g.offsetY
+	ix := (float64(ww)-dw)/2 + g.offsetX
+	iy := (float64(wh)-dh)/2 + g.offsetY
 	return (sx - ix) / g.scale, (sy - iy) / g.scale
 }
 
-func (g *Game) selImgCoords() (int, int, int, int) {
-	x1, y1 := g.screenToImg(g.selStartX, g.selStartY)
-	x2, y2 := g.screenToImg(g.selEndX, g.selEndY)
+func (g *Game) selImgCoords(ww, wh int) (int, int, int, int) {
+	x1, y1 := g.screenToImg(g.selStartX, g.selStartY, ww, wh)
+	x2, y2 := g.screenToImg(g.selEndX, g.selEndY, ww, wh)
 	iw := g.img.Bounds().Dx()
 	ih := g.img.Bounds().Dy()
 	minX := int(min(x1, x2))
@@ -239,12 +240,16 @@ func (g *Game) crop() {
 	if !g.hasSel || g.img == nil {
 		return
 	}
-	minX, minY, maxX, maxY := g.selImgCoords()
+	ww, wh := ebiten.WindowSize()
+	minX, minY, maxX, maxY := g.selImgCoords(ww, wh)
 	if maxX <= minX || maxY <= minY {
 		return
 	}
-	sub := g.img.SubImage(image.Rect(minX, minY, maxX, maxY))
-	g.img = ebiten.NewImageFromImage(sub)
+	subRect := image.Rect(minX, minY, maxX, maxY)
+	sub := image.NewRGBA(subRect)
+	draw.Draw(sub, subRect, g.img, image.Point{X: minX, Y: minY}, draw.Src)
+	g.img = sub
+	g.drawImg = ebiten.NewImageFromImage(sub)
 	g.scale = 1.0
 	g.offsetX, g.offsetY = 0, 0
 	g.hasSel = false
@@ -255,18 +260,14 @@ func (g *Game) copy() {
 	if !g.hasSel || g.img == nil {
 		return
 	}
-	minX, minY, maxX, maxY := g.selImgCoords()
+	ww, wh := ebiten.WindowSize()
+	minX, minY, maxX, maxY := g.selImgCoords(ww, wh)
 	if maxX <= minX || maxY <= minY {
 		return
 	}
-	sub := g.img.SubImage(image.Rect(minX, minY, maxX, maxY))
-	b := sub.Bounds()
-	rgba := image.NewRGBA(b)
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			rgba.Set(x, y, sub.At(x, y))
-		}
-	}
+	subRect := image.Rect(minX, minY, maxX, maxY)
+	rgba := image.NewRGBA(subRect)
+	draw.Draw(rgba, subRect, g.img, image.Point{X: minX, Y: minY}, draw.Src)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, rgba); err != nil {
 		log.Println("copy:", err)
@@ -308,13 +309,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	dw := iw * g.scale
 	dh := ih * g.scale
-	x := (float64(ww) - dw) / 2 + g.offsetX
-	y := (float64(wh) - dh) / 2 + g.offsetY
+	x := (float64(ww)-dw)/2 + g.offsetX
+	y := (float64(wh)-dh)/2 + g.offsetY
 
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(g.scale, g.scale)
 	op.GeoM.Translate(x, y)
-	screen.DrawImage(g.img, op)
+	screen.DrawImage(g.drawImg, op)
 
 	if g.hasSel || g.selecting {
 		minX := min(g.selStartX, g.selEndX)
@@ -423,7 +424,8 @@ func (g *Game) loadImage(path string) {
 		}
 	}
 
-	g.img = ebiten.NewImageFromImage(img)
+	g.img = img
+	g.drawImg = ebiten.NewImageFromImage(img)
 	g.hasImg = true
 	g.scale = 1.0
 	g.offsetX, g.offsetY = 0, 0

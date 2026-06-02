@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
+
+      - name: Go mod tidy
+        run: go mod tidy
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v ./...
+
+  build-release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            binary: imageviewer
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            binary: imageviewer
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            binary: imageviewer
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary: imageviewer
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            binary: imageviewer.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux dependencies
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            go build -ldflags="-s -w" -o ${{ matrix.binary }} .
+          elif [ "${{ matrix.goos }}" = "windows" ]; then
+            go build -ldflags="-s -w" -o ${{ matrix.binary }} .
+          else
+            go build -ldflags="-s -w" -o ${{ matrix.binary }} .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imageviewer-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ matrix.binary }}
+
+      - name: Package release
+        run: |
+          tar czf imageviewer-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ matrix.binary }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip imageviewer-${{ matrix.goos }}-${{ matrix.goarch }}.zip ${{ matrix.binary }}
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            imageviewer-${{ matrix.goos }}-${{ matrix.goarch }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
